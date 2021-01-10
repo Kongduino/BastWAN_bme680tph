@@ -14,6 +14,9 @@
 #include "ClosedCube_BME680.h"
 
 ClosedCube_BME680 bme680;
+double refHPa = 1021.7;
+char msgBuf[256];
+double timeout;
 
 void setup() {
   Wire.begin();
@@ -33,27 +36,48 @@ void setup() {
   bme680.setOversampling(BME680_OVERSAMPLING_X1, BME680_OVERSAMPLING_X2, BME680_OVERSAMPLING_X16);
   bme680.setIIRFilter(BME680_FILTER_3);
   bme680.setForcedMode();
+  timeout = 0;
 }
 
 void loop() {
-  ClosedCube_BME680_Status status = readAndPrintStatus();
-  if (status.newDataFlag) {
-    Serial.print("result: ");
-    double temp = bme680.readTemperature();
-    double pres = bme680.readPressure();
-    double hum = bme680.readHumidity();
-    Serial.print("T=");
-    Serial.print(temp);
-    Serial.print("C, RH=");
-    Serial.print(hum);
-    Serial.print("%, P=");
-    Serial.print(pres);
-    Serial.print(" hPa");
-    Serial.println();
-    delay(5000); // let's do nothing and wait a bit before perform next measurements
-    bme680.setForcedMode();
-  } else {
-    delay(1000); // sensor data not yet ready
+  if (SerialUSB.available()) {
+    memset(msgBuf, 0, 256);
+    int ix = 0;
+    while (SerialUSB.available()) {
+      char c = SerialUSB.read();
+      delay(10);
+      if (c > 31) msgBuf[ix++] = c;
+    } msgBuf[ix] = 0;
+    handleCommand();
+  }
+  if (millis() - timeout > 5000) {
+    ClosedCube_BME680_Status status = readAndPrintStatus();
+    if (status.newDataFlag) {
+      Serial.print("result: ");
+      double temp = bme680.readTemperature();
+      double pres = bme680.readPressure();
+      double hum = bme680.readHumidity();
+      Serial.print("T=");
+      Serial.print(temp);
+      Serial.print("C, RH = ");
+      Serial.print(hum);
+      Serial.print("%, P = ");
+      Serial.print(pres);
+      Serial.print(" hPa");
+      Serial.print(", Alt = ");
+      // https://community.bosch-sensortec.com/t5/Question-and-answers/How-to-calculate-the-altitude-from-the-pressure-sensor-data/qaq-p/5702
+      Serial.print(44330 * (1 - pow((pres / refHPa), (1 / 5.255))));
+      Serial.print(" m");
+      Serial.println();
+      // Alternate calculation - same result
+      // https://github.com/nodemcu/nodemcu-firmware/blob/release/app/modules/bme680.c#L535
+      // Serial.print("Alt = ");
+      // Serial.print((1.0 - pow(pres / refHPa, 1.0 / 5.25588)) / 2.25577e-5);
+      // Serial.print(" m");
+      // Serial.println();
+      bme680.setForcedMode();
+    }
+    timeout = millis();
   }
 }
 
@@ -69,4 +93,17 @@ ClosedCube_BME680_Status readAndPrintStatus() {
   //  Serial.print(status.gasMeasurementIndex);
   //  Serial.println(") (newDataFlag,StatusFlag,GasFlag,GasIndex)");
   return status;
+}
+void handleCommand() {
+  char c = msgBuf[0]; // Command
+  if (c == '/') {
+    c = msgBuf[1]; // Subcommand
+    if (c == 'P') {
+      double pp = (atof(msgBuf + 2));
+      if (pp < 700) return;
+      refHPa = pp;
+      SerialUSB.print("set MSL pressure to "); SerialUSB.println(pp);
+      return;
+    }
+  }
 }
